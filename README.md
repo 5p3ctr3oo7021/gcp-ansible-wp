@@ -6,7 +6,7 @@
   ```sh
   python3 -m venv venv
   ```
-*python venv aktiválása: source venv/bin/activate
+* python venv aktiválása:
   ```sh
   source venv/bin/activate
   ```
