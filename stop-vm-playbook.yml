@@ -1,0 +1,19 @@
+- name: My first play
+  hosts: localhost
+  gather_facts: no
+  tasks:
+    - name: Ping my hosts
+      ansible.builtin.ping:
+
+    - name: Print message
+      ansible.builtin.debug:
+        msg: Shutdown...
+
+    - name: Stop the VM
+      google.cloud.gcp_compute_instance:
+        auth_kind: serviceaccount
+        service_account_file: "/home/wordpress-ansible/my_account.json"  # A szolgáltatásfiók JSON fájl elérési útja
+        project: devops-intern-450909
+        zone: europe-north1-b
+        name: test-vm2  # A VM neve, amit le szeretnél állítani
+        state: absent  # A VM leállítása
