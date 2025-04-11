@@ -1,0 +1,155 @@
+- name: Create an instance
+  hosts: localhost
+  gather_facts: false
+  vars:
+    gcp_project: devops-intern-450909
+    gcp_cred_kind: serviceaccount
+    gcp_cred_file: ../my_account.json
+    zone: "europe-north1-b"
+    region: "europe-north1"
+    instance_name: wordpress-app
+    machine_type: e2-micro
+    disk_size_gb: 10
+    ip_cidr_range: 172.16.0.0/28
+  tasks:
+  - name: Create VPC Network
+    gcp_compute_network:
+      name: wordpress-app-network
+      auto_create_subnetworks: yes
+      project: "{{ gcp_project }}"
+      auth_kind: "{{ gcp_cred_kind }}"
+      service_account_file: "{{ gcp_cred_file }}"
+      state: present
+    register: network
+
+  - name: Create subnet within above VPC network
+    gcp_compute_subnetwork:
+      name: wordpress-app-subnet
+      region: "{{ region }}"
+      network: "{{ network }}"
+      ip_cidr_range: "{{ ip_cidr_range }}"
+      project: "{{ gcp_project }}"
+      auth_kind: "{{ gcp_cred_kind }}"
+      service_account_file: "{{ gcp_cred_file }}"
+      state: present
+    register: subnet
+
+  - name: Create firewall rule to allow port 80, 443 and 22 for all source IPs
+    gcp_compute_firewall:
+      name: wordpress-app-firewall
+      network: "{{ network }}"
+      allowed:
+      - ip_protocol: tcp
+        ports: ['80','443','22']
+      target_tags:
+        - wordpress-app
+      source_ranges: ['0.0.0.0/0']
+      project: "{{ gcp_project }}"
+      auth_kind: "{{ gcp_cred_kind }}"
+      service_account_file: "{{ gcp_cred_file }}"
+      state: present
+    register: firewall
+
+  - name: Create IP address for instance name
+    gcp_compute_address:
+      name: "{{ instance_name }}"
+      region: "{{ region }}"
+      project: "{{ gcp_project }}"
+      auth_kind: "{{ gcp_cred_kind }}"
+      service_account_file: "{{ gcp_cred_file }}"
+      state: present
+    register: address
+
+  - name: Create disk for new instance
+    gcp_compute_disk:
+      name: "{{ instance_name }}"
+      size_gb: "{{ disk_size_gb }}"
+      source_image: 'projects/debian-cloud/global/images/debian-12-bookworm-v20250212'
+      zone: "{{ zone }}"
+      project: "{{ gcp_project }}"
+      auth_kind: "{{ gcp_cred_kind }}"
+      service_account_file: "{{ gcp_cred_file }}"
+      state: present
+    register: disk
+
+  - name: Create new instance
+    gcp_compute_instance:
+      state: present
+      name: "{{ instance_name }}"
+      machine_type: "{{ machine_type }}"
+      disks:
+      - auto_delete: true
+        boot: true
+        source: "{{ disk }}"
+      network_interfaces:
+      - network: "{{ network }}"
+        subnetwork: "{{ subnet }}"
+        access_configs:
+        - name: External NAT
+          nat_ip: "{{ address }}"
+          type: ONE_TO_ONE_NAT
+      zone: "{{ zone }}"
+      tags:
+        items:
+          - wordpress-app
+      project: "{{ gcp_project }}"
+      auth_kind: "{{ gcp_cred_kind }}"
+      service_account_file: "{{ gcp_cred_file }}"
+    register: instance
+
+  - name: Add host to groupname
+    add_host:
+      hostname: "{{ address.address }}"
+      groupname: wordpress-app
+
+  - name: Refresh inventory to include new host
+    meta: refresh_inventory
+    
+- name: Configure wordpress-app
+  hosts: wordpress-app
+  become: true
+  tasks:
+    - name: Update APT cache
+      apt:
+        update_cache: yes
+
+    - name: Install Apache
+      apt:
+        name: apache2
+        state: present
+
+    - name: Enable Apache service
+      systemd:
+        name: apache2
+        enabled: yes
+
+    - name: Start Apache service
+      systemd:
+        name: apache2
+        state: started
+
+    - name: Install PHP and required modules
+      apt:
+        name:
+          - php
+          - libapache2-mod-php
+          - php-mysql
+        state: present
+        update_cache: yes
+      when: ansible_os_family == "Debian"
+
+    - name: Download WP-CLI
+      get_url:
+        url: https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
+        dest: /usr/local/bin/wp
+        mode: "0755"
+
+    - name: Verify WP-CLI installation
+      command: wp --info
+      register: wp_cli_info
+      changed_when: false
+
+    - name: Debug WP-CLI output
+      debug:
+        msg: "{{ wp_cli_info.stdout }}"
+
